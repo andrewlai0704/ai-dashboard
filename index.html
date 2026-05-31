@@ -615,11 +615,13 @@ async function fetchStockSummary(ticker) {
     const meta = res.meta, q = res.indicators.quote[0];
     const closes = q.close.filter(Boolean);
     const current = meta.regularMarketPrice || closes.slice(-1)[0];
-    const prev = meta.chartPreviousClose || closes.slice(-2)[0];
-    const chgPct = ((current-prev)/prev*100).toFixed(2);
+    // 使用 Yahoo Finance 官方當日漲跌幅，避免和月初比較的錯誤
+    const chgPct = meta.regularMarketChangePercent !== undefined && meta.regularMarketChangePercent !== null
+      ? parseFloat(meta.regularMarketChangePercent.toFixed(2))
+      : parseFloat(((current - (meta.chartPreviousClose||closes.slice(-2)[0])) / (meta.chartPreviousClose||closes.slice(-2)[0]) * 100).toFixed(2));
     const rsi = computeRSI(q.close,14).filter(Boolean).slice(-1)[0];
     const ema20 = computeEMA(q.close,20).filter(Boolean).slice(-1)[0];
-    return {ticker, name:meta.shortName||meta.symbol, price:current.toFixed(2), chgPct:parseFloat(chgPct), rsi:rsi?rsi.toFixed(1):'N/A', aboveEMA20:current>ema20};
+    return {ticker, name:meta.shortName||meta.symbol, price:current.toFixed(2), chgPct, rsi:rsi?rsi.toFixed(1):'N/A', aboveEMA20:current>ema20};
   } catch(e) { return null; }
 }
 
@@ -666,29 +668,40 @@ async function generateBriefing() {
     const session=hour>=8&&hour<14?'台股盤中':hour>=14&&hour<22?'盤後/美股盤前':'美股盤中/收盤後';
     const prompt=`台北時間 ${timeStr}（${session}）盤前簡報。
 
+【市場數據】
 全球指數：${marketSummary}
-
 美股：
 ${usStocksSummary}
-
 台股：
 ${twStocksSummary}
 
-請用繁體中文輸出五個段落（每段2句內）：
-1.📊盤勢總結 2.🇺🇸美股重點 3.🇹🇼台股重點 4.⚡操作建議 5.⚠️主要風險`;
+【任務】
+請先用 web_search 搜尋以下資訊（每檔各搜一次）：
+- MU 最新新聞、分析師目標價、財報或產業動態
+- OUST 最新新聞、分析師目標價調整、機構評級
+- 台股2313 華通最新新聞、法人報告、近期利多利空
+
+搜尋完成後，用繁體中文輸出以下五個段落（每段2-3句）：
+1.📊 盤勢總結
+2.🇺🇸 美股重點（含最新催化劑）
+3.🇹🇼 台股重點（含最新催化劑）
+4.⚡ 今日操作建議
+5.⚠️ 主要風險`;
 
     const r=await fetch('/api/analyze',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6', max_tokens:800,
-        system:'你是頂尖的台股美股分析師，擅長盤前市場解讀。輸出繁體中文，格式清晰，每段落用標題分隔。',
+        model:'claude-sonnet-4-6', max_tokens:2000,
+        tools:[{type:'web_search_20250305',name:'web_search'}],
+        system:'你是頂尖的台股美股分析師，擅長盤前市場解讀。你可以使用 web_search 工具搜尋每檔個股的最新新聞、分析師評級、目標價調整、重大事件等催化劑。輸出繁體中文，格式清晰，每段落用標題分隔。',
         messages:[{role:'user',content:prompt}]
       })
     });
     if (!r.ok) throw new Error('API '+r.status);
     const json=await r.json();
     if (!json.content) throw new Error(JSON.stringify(json));
-    const text=json.content.map(b=>b.text||'').join('');
+    // 過濾出 text 類型的 block（忽略 tool_use / tool_result）
+    const text=json.content.filter(b=>b.type==='text').map(b=>b.text||'').join('');
     const html=text.split('\n').filter(l=>l.trim()).map(l=>{
       if (l.match(/^#{1,3} /)) return `<h3>${l.replace(/^#{1,3} /,'')}</h3>`;
       if (l.match(/^[1-5]\.|^📊|^🇺🇸|^🇹🇼|^⚡|^⚠️/)) return `<h3>${l}</h3>`;
