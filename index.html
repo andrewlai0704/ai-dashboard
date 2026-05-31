@@ -134,6 +134,47 @@
   .inst-detail { font-size:11px; color:var(--muted); margin-top:3px; }
   .inst-total { margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
                 display:flex; justify-content:space-between; align-items:center; }
+  /* 今日簡報 */
+  .brief-btn {
+    display:flex; align-items:center; gap:8px;
+    padding:10px 20px; border-radius:var(--radius-md);
+    background:var(--accent); color:#fff; border:none;
+    font-size:14px; font-weight:500; font-family:var(--font-sans);
+    cursor:pointer; transition:opacity .15s; margin-bottom:24px;
+  }
+  .brief-btn:hover { opacity:.85; }
+  .brief-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .brief-panel {
+    background:var(--bg); border:1px solid var(--border);
+    border-radius:var(--radius-lg); padding:20px 24px;
+    margin-bottom:24px; display:none;
+  }
+  .brief-panel.visible { display:block; }
+  .brief-header {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:16px; flex-wrap:wrap; gap:8px;
+  }
+  .brief-badge {
+    font-size:11px; font-weight:500;
+    background:var(--accent-bg); color:var(--accent);
+    padding:3px 10px; border-radius:var(--radius-md);
+  }
+  .brief-time { font-size:11px; color:var(--hint); }
+  .brief-content { font-size:13px; color:var(--muted); line-height:1.8; }
+  .brief-content h3 {
+    font-size:13px; font-weight:600; color:var(--text);
+    margin:14px 0 6px; padding-bottom:4px;
+    border-bottom:1px solid var(--border);
+  }
+  .brief-content h3:first-child { margin-top:0; }
+  .brief-content p { margin-bottom:6px; }
+  .brief-content strong { color:var(--text); font-weight:500; }
+  .brief-content .tag-up { color:var(--up); font-weight:500; }
+  .brief-content .tag-dn { color:var(--down); font-weight:500; }
+  .brief-progress {
+    font-size:12px; color:var(--muted);
+    display:flex; align-items:center; gap:8px;
+  }
 </style>
 </head>
 <body>
@@ -143,6 +184,21 @@
 
 <p class="section-label">全球市場概覽</p>
 <div class="market-grid" id="marketGrid"></div>
+
+<button class="brief-btn" onclick="generateBriefing()" id="briefBtn">
+  📋 產生今日盤前簡報
+</button>
+
+<div id="briefPanel" class="brief-panel">
+  <div class="brief-header">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="brief-badge">Claude AI</span>
+      <span style="font-size:14px;font-weight:500;">今日盤前簡報</span>
+    </div>
+    <span class="brief-time" id="briefTime"></span>
+  </div>
+  <div class="brief-content" id="briefContent"></div>
+</div>
 
 <p class="section-label">個股查詢</p>
 <div class="search-row">
@@ -760,6 +816,171 @@ document.getElementById('tickerInput').addEventListener('keydown',e=>{
 });
 
 renderMarketGrid();
+
+// ============================
+// 今日盤前簡報
+// ============================
+
+const US_WATCHLIST = ['AAPL','NVDA','TSLA','MSFT','META','MU','AAOI','OUST'];
+const TW_WATCHLIST = [
+  { ticker:'2330.TW', no:'2330' },
+  { ticker:'2317.TW', no:'2317' },
+  { ticker:'2313.TW', no:'2313' },
+];
+
+async function fetchStockSummary(ticker) {
+  try {
+    const r = await fetch('/api/stock?ticker=' + encodeURIComponent(ticker) + '&interval=1d');
+    if (!r.ok) return null;
+    const j = await r.json();
+    const res = j.chart.result[0];
+    const meta = res.meta;
+    const q = res.indicators.quote[0];
+    const closes = q.close.filter(Boolean);
+    const current = meta.regularMarketPrice || closes.slice(-1)[0];
+    const prev = meta.chartPreviousClose || closes.slice(-2)[0];
+    const chgPct = ((current - prev) / prev * 100).toFixed(2);
+    const rsi = computeRSI(q.close, 14).filter(Boolean).slice(-1)[0];
+    const ema20 = computeEMA(q.close, 20).filter(Boolean).slice(-1)[0];
+    return {
+      ticker,
+      name: meta.shortName || meta.symbol,
+      price: current.toFixed(2),
+      chgPct: parseFloat(chgPct),
+      rsi: rsi ? rsi.toFixed(1) : 'N/A',
+      aboveEMA20: current > ema20,
+    };
+  } catch(e) { return null; }
+}
+
+async function fetchTWSESummary(stockNo) {
+  try {
+    const r = await fetch('/api/twse?stockNo=' + stockNo);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (d.error) return null;
+    return { stockNo, total: d.total, foreign: d.foreign.net, trust: d.trust.net };
+  } catch(e) { return null; }
+}
+
+async function generateBriefing() {
+  const btn = document.getElementById('briefBtn');
+  const panel = document.getElementById('briefPanel');
+  const content = document.getElementById('briefContent');
+  const timeEl = document.getElementById('briefTime');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 收集數據中...';
+  panel.classList.add('visible');
+  content.innerHTML = '<div class="brief-progress"><span class="spinner"></span> 正在收集各市場數據，請稍候...</div>';
+
+  // 取得時間
+  const now = new Date();
+  const timeStr = now.toLocaleString('zh-TW', { timeZone:'Asia/Taipei', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  timeEl.textContent = timeStr + ' 台北時間';
+
+  try {
+    // 1. 全球市場
+    btn.textContent = '⏳ 載入全球市場...';
+    const marketsRes = await fetch('/api/markets');
+    const markets = marketsRes.ok ? await marketsRes.json() : [];
+
+    // 2. 美股關注清單
+    btn.textContent = '⏳ 載入美股數據...';
+    const usResults = await Promise.all(US_WATCHLIST.map(t => fetchStockSummary(t)));
+
+    // 3. 台股關注清單
+    btn.textContent = '⏳ 載入台股數據...';
+    const twResults = await Promise.all(TW_WATCHLIST.map(s => fetchStockSummary(s.ticker)));
+    const twseResults = await Promise.all(TW_WATCHLIST.map(s => fetchTWSESummary(s.no)));
+
+    // 組合台股資料
+    const twCombined = TW_WATCHLIST.map((s, i) => ({
+      ...twResults[i],
+      twse: twseResults[i],
+    })).filter(d => d.price);
+
+    // 4. 組 Prompt
+    btn.textContent = '⏳ Claude 分析中...';
+
+    const marketSummary = markets.filter(m => m.live).map(m =>
+      `${m.name}：${m.price?.toFixed ? m.price.toFixed(0) : m.price}（${m.chg >= 0 ? '+' : ''}${m.chg?.toFixed(2)}%）`
+    ).join('、');
+
+    const usStocksSummary = usResults.filter(Boolean).map(s =>
+      `${s.ticker} ${s.name}：$${s.price}（${s.chgPct >= 0 ? '+' : ''}${s.chgPct}%）RSI=${s.rsi} ${s.aboveEMA20 ? '站上EMA20' : '跌破EMA20'}`
+    ).join('
+');
+
+    const twStocksSummary = twCombined.map(s => {
+      const twse = s.twse;
+      const inst = twse ? `外資${twse.foreign >= 0 ? '+' : ''}${twse.foreign}張 投信${twse.trust >= 0 ? '+' : ''}${twse.trust}張 合計${twse.total >= 0 ? '+' : ''}${twse.total}張` : '法人數據無';
+      return `${s.ticker.replace('.TW','')} ${s.name}：${s.price}（${s.chgPct >= 0 ? '+' : ''}${s.chgPct}%）法人籌碼：${inst}`;
+    }).join('
+');
+
+    const hour = now.getHours();
+    const session = hour >= 8 && hour < 14 ? '台股盤中' : hour >= 14 && hour < 22 ? '盤後/美股盤前' : '美股盤中/收盤後';
+
+    const prompt = `現在是台北時間 ${timeStr}（${session}）。
+
+請根據以下數據，產生一份專業的盤前簡報，使用繁體中文，格式清晰有條理。
+
+【全球主要指數】
+${marketSummary}
+
+【美股關注清單】
+${usStocksSummary}
+
+【台股關注清單（含法人籌碼）】
+${twStocksSummary}
+
+請輸出以下段落：
+1. 📊 盤勢總結（2-3句，說明目前市場氛圍）
+2. 🇺🇸 美股重點（逐一點評關注個股，說明強弱與注意事項）
+3. 🇹🇼 台股重點（逐一點評，結合法人籌碼方向）
+4. ⚡ 今日操作重點（3條具體建議，如哪些股值得關注、哪些需要等待）
+5. ⚠️ 主要風險（今日需注意的風險因素）
+
+每段落簡潔有力，適合盤前快速閱讀。`;
+
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1500,
+        system: '你是頂尖的台股美股分析師，擅長盤前市場解讀。輸出繁體中文，格式清晰，每段落用標題分隔。',
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!r.ok) throw new Error('API ' + r.status);
+    const json = await r.json();
+    if (!json.content) throw new Error(JSON.stringify(json));
+    const text = json.content.map(b => b.text || '').join('');
+
+    // 渲染簡報
+    const html = text
+      .split('
+')
+      .filter(l => l.trim())
+      .map(l => {
+        if (l.match(/^#{1,3} /)) return `<h3>${l.replace(/^#{1,3} /, '')}</h3>`;
+        if (l.match(/^[1-5]\./)||l.match(/^📊|^🇺🇸|^🇹🇼|^⚡|^⚠️/)) return `<h3>${l}</h3>`;
+        return `<p>${l}</p>`;
+      })
+      .join('');
+
+    content.innerHTML = html + '<p style="margin-top:16px;font-size:11px;color:var(--hint);">⚠️ 以上分析由 Claude AI 產生，僅供參考，不構成投資建議。</p>';
+
+  } catch(e) {
+    content.innerHTML = `<span style="color:var(--down)">產生失敗：${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 重新產生簡報';
+  }
+}
 </script>
 </body>
 </html>
