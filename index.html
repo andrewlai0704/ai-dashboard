@@ -503,8 +503,8 @@ async function loadTWSE(stockNo) {
     ].map(item => `
       <div class="inst-card">
         <div class="inst-name">${item.name}</div>
-        <div class="inst-net">${fmt(item.data.net)}</div>
-        <div class="inst-detail">買 ${item.data.buy.toLocaleString()} / 賣 ${item.data.sell.toLocaleString()}</div>
+        <div class="inst-net">${fmt(item.data.net)} 張</div>
+        <div class="inst-detail">買 ${item.data.buy.toLocaleString()} 張 / 賣 ${item.data.sell.toLocaleString()} 張</div>
       </div>
     `).join('');
 
