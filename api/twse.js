@@ -54,7 +54,8 @@ export default async function handler(req) {
       // [11] 自營商買進(避險), [12] 自營商賣出(避險), [13] 自營商買賣超(避險)
       // [14] 三大法人買賣超合計
 
-      const parseNum = (str) => parseInt((str || '0').replace(/,/g, ''), 10) || 0;
+      // TWSE 數據單位為股，除以 1000 換算為張
+      const parseNum = (str) => Math.round((parseInt((str || '0').replace(/,/g, ''), 10) || 0) / 1000);
 
       institutionalData = {
         date,
