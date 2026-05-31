@@ -440,6 +440,7 @@ RSI：${d.rsiLatest?d.rsiLatest.toFixed(1):'N/A'} | EMA20：${ema20v} | 在EMA20
     });
     if (!r.ok) throw new Error('API '+r.status);
     const json=await r.json();
+    if (!json || !json.content) throw new Error('API回傳：' + JSON.stringify(json));
     const text=json.content.map(b=>b.text||'').join('');
     renderAIOutput(text,d);
   } catch(e) {
