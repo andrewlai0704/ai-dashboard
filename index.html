@@ -350,7 +350,7 @@ async function fetchYahooData(ticker) {
   const meta = res.meta, q = res.indicators.quote[0], ts = res.timestamp;
   const closes = q.close, volumes = q.volume;
   const current = meta.regularMarketPrice || closes.filter(Boolean).slice(-1)[0];
-  const prev = meta.chartPreviousClose || closes.filter(Boolean).slice(-2)[0];
+  const prev = meta.regularMarketPreviousClose || meta.chartPreviousClose || closes.filter(Boolean).slice(-2)[0];
   const avgVol = volumes.filter(Boolean).reduce((a,b)=>a+b,0)/volumes.filter(Boolean).length;
   const labels = ts.map(t => { const d=new Date(t*1000); return `${d.getMonth()+1}/${d.getDate()}`; });
   return {
@@ -456,7 +456,7 @@ async function switchKline(interval) {
     const meta = res.meta, q = res.indicators.quote[0], ts = res.timestamp;
     const closes = q.close;
     const current = meta.regularMarketPrice || closes.filter(Boolean).slice(-1)[0];
-    const prev = meta.chartPreviousClose || closes.filter(Boolean).slice(-2)[0];
+    const prev = meta.regularMarketPreviousClose || meta.chartPreviousClose || closes.filter(Boolean).slice(-2)[0];
     const avgVol = q.volume.filter(Boolean).reduce((a,b)=>a+b,0)/q.volume.filter(Boolean).length;
     renderKlineChart({
       ticker:currentTicker, price:current,
@@ -613,10 +613,9 @@ async function fetchStockSummary(ticker) {
     const meta = res.meta, q = res.indicators.quote[0];
     const closes = q.close.filter(Boolean);
     const current = meta.regularMarketPrice || closes.slice(-1)[0];
-    // 使用 Yahoo Finance 官方當日漲跌幅，避免和月初比較的錯誤
-    const chgPct = meta.regularMarketChangePercent !== undefined && meta.regularMarketChangePercent !== null
-      ? parseFloat(meta.regularMarketChangePercent.toFixed(2))
-      : parseFloat(((current - (meta.chartPreviousClose||closes.slice(-2)[0])) / (meta.chartPreviousClose||closes.slice(-2)[0]) * 100).toFixed(2));
+    // regularMarketPreviousClose = 前一交易日收盤（正確）
+    const prev = meta.regularMarketPreviousClose || meta.chartPreviousClose || closes.slice(-2)[0];
+    const chgPct = parseFloat(((current - prev) / prev * 100).toFixed(2));
     const rsi = computeRSI(q.close,14).filter(Boolean).slice(-1)[0];
     const ema20 = computeEMA(q.close,20).filter(Boolean).slice(-1)[0];
     return {ticker, name:meta.shortName||meta.symbol, price:current.toFixed(2), chgPct, rsi:rsi?rsi.toFixed(1):'N/A', aboveEMA20:current>ema20};
@@ -648,22 +647,54 @@ async function generateBriefing() {
   timeEl.textContent=timeStr+' 台北時間';
 
   try {
-    // 只抓 OUST 一檔
+    // Step 1: 股價數據
     const oust = await fetchStockSummary('OUST');
-    if (!oust) throw new Error('無法取得 OUST 數據');
+    if (!oust) throw new Error('無法取得 OUST 股價數據');
 
+    // Step 2: 新聞 + 分析師數據（Finnhub）
+    btn.textContent='⏳ 載入新聞與分析師數據...';
+    bc.innerHTML='<span class="spinner"></span> 載入 Finnhub 新聞與分析師目標價...';
+    let newsSection = '';
+    try {
+      const nr = await fetch('/api/news?symbol=OUST');
+      if (nr.ok) {
+        const nd = await nr.json();
+        if (nd.priceTarget) {
+          newsSection += `
+分析師目標價：平均 $${nd.priceTarget.mean}，最高 $${nd.priceTarget.high}，最低 $${nd.priceTarget.low}`;
+        }
+        if (nd.latestRec) {
+          newsSection += `
+機構評級（${nd.latestRec.period}）：買入 ${nd.latestRec.buy+nd.latestRec.strongBuy} 家，持有 ${nd.latestRec.hold} 家，賣出 ${nd.latestRec.sell} 家`;
+        }
+        if (nd.news && nd.news.length > 0) {
+          newsSection += '
+近7日新聞：
+' + nd.news.map(n => `- [${n.date}] ${n.headline}（${n.source}）`).join('
+');
+        }
+      }
+    } catch(e) {
+      newsSection = '
+（新聞數據暫時無法取得）';
+    }
+
+    // Step 3: Claude 分析
     btn.textContent='⏳ Claude 分析中...';
-    bc.innerHTML='<span class="spinner"></span> Claude 正在分析 OUST...';
+    bc.innerHTML='<span class="spinner"></span> Claude 正在整合數據分析...';
 
     const prompt=`OUST（Ouster，雷達感測器）盤前分析（台北時間 ${timeStr}）：
+
+【技術數據】
 股價：$${oust.price}（今日 ${oust.chgPct>=0?'+':''}${oust.chgPct}%）
 RSI(14)：${oust.rsi}
-EMA20：${oust.aboveEMA20?'股價站上 EMA20（多頭排列）':'股價跌破 EMA20（空頭排列）'}
+EMA20：${oust.aboveEMA20?'站上（多頭排列）':'跌破（空頭排列）'}
+${newsSection}
 
-請用繁體中文輸出以下四段（每段1-2句）：
+請用繁體中文輸出以下四段（每段1-2句，結合以上數據與新聞）：
 1. 📊 多空評分（1-10分）與判斷依據
-2. 🇺🇸 技術面重點（趨勢、支撐壓力）
-3. ⚡ 操作建議（進場或觀望？）
+2. 📰 近期重要催化劑（新聞/分析師動態）
+3. ⚡ 操作建議
 4. ⚠️ 主要風險`;
 
     const r=await fetch('/api/analyze',{
@@ -671,8 +702,8 @@ EMA20：${oust.aboveEMA20?'股價站上 EMA20（多頭排列）':'股價跌破 E
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         model:'claude-sonnet-4-6',
-        max_tokens:500,
-        system:'你是美股技術分析師，給出精簡有力的繁體中文分析，每段一到兩句。',
+        max_tokens:600,
+        system:'你是美股分析師，整合技術數據與最新新聞，給出精簡有力的繁體中文分析，每段一到兩句。',
         messages:[{role:'user',content:prompt}]
       })
     });
@@ -683,7 +714,7 @@ EMA20：${oust.aboveEMA20?'股價站上 EMA20（多頭排列）':'股價跌破 E
     const text=json.content.filter(b=>b.type==='text').map(b=>b.text||'').join('');
 
     const html=text.split('\n').filter(l=>l.trim()).map(l=>{
-      if (l.match(/^[1-4]\.|^📊|^🇺🇸|^⚡|^⚠️/)) return `<h3>${l}</h3>`;
+      if (l.match(/^[1-4]\.|^📊|^📰|^⚡|^⚠️/)) return `<h3>${l}</h3>`;
       return `<p>${l}</p>`;
     }).join('');
 
