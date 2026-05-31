@@ -52,6 +52,10 @@
             border:1px solid var(--border); background:transparent; color:var(--muted);
             cursor:pointer; font-family:var(--font-mono); transition:all .15s; }
   .q-btn:hover { background:var(--surface); color:var(--text); }
+  .q-btn.recent { border-color:var(--accent); color:var(--accent); }
+  .q-btn.recent:hover { background:var(--accent-bg); }
+  .quick-row { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; align-items:center; }
+  .row-label { font-size:10px; color:var(--hint); letter-spacing:.06em; white-space:nowrap; }
   .stock-header { background:var(--bg); border:1px solid var(--border);
                   border-radius:var(--radius-lg); padding:16px 20px;
                   margin-bottom:12px; display:none; }
@@ -150,14 +154,27 @@
   <button class="search-btn" onclick="loadStock()" id="searchBtn">查詢</button>
 </div>
 
-<div class="quick-btns">
+<!-- 第一列：最近查詢 -->
+<div class="quick-row" id="recentRow">
+  <span class="row-label">最近查詢</span>
+  <span id="recentBtns" style="display:flex;gap:6px;flex-wrap:wrap;">
+    <span style="font-size:11px;color:var(--hint);">尚無記錄</span>
+  </span>
+</div>
+<!-- 第二列：常用個股 -->
+<div class="quick-row" style="margin-bottom:20px;">
+  <span class="row-label">常用個股</span>
   <button class="q-btn" onclick="quickLoad('AAPL')">AAPL</button>
   <button class="q-btn" onclick="quickLoad('NVDA')">NVDA</button>
   <button class="q-btn" onclick="quickLoad('TSLA')">TSLA</button>
   <button class="q-btn" onclick="quickLoad('MSFT')">MSFT</button>
   <button class="q-btn" onclick="quickLoad('META')">META</button>
+  <button class="q-btn" onclick="quickLoad('MU')">MU</button>
+  <button class="q-btn" onclick="quickLoad('AAOI')">AAOI</button>
+  <button class="q-btn" onclick="quickLoad('OUST')">OUST</button>
   <button class="q-btn" onclick="setMarket('TW'); quickLoad('2330.TW')">2330 台積電</button>
   <button class="q-btn" onclick="setMarket('TW'); quickLoad('2317.TW')">2317 鴻海</button>
+  <button class="q-btn" onclick="setMarket('TW'); quickLoad('2313.TW')">2313 華通</button>
 </div>
 
 <div id="errorMsg" class="error-msg"></div>
@@ -296,7 +313,38 @@ function setMarket(m) {
     m==='TW' ? '輸入代號，如 2330 / 2317' : '輸入代號，如 AAPL / NVDA';
 }
 
+// 最近查詢記錄
+let recentTickers = [];
+
+function addRecent(ticker, name) {
+  // 移除重複
+  recentTickers = recentTickers.filter(r => r.ticker !== ticker);
+  // 加到最前面
+  recentTickers.unshift({ ticker, name });
+  // 只保留最近5筆
+  if (recentTickers.length > 5) recentTickers = recentTickers.slice(0, 5);
+  renderRecentBtns();
+}
+
+function renderRecentBtns() {
+  const container = document.getElementById('recentBtns');
+  if (!container) return;
+  if (recentTickers.length === 0) {
+    container.innerHTML = '<span style="font-size:11px;color:var(--hint);">尚無記錄</span>';
+    return;
+  }
+  container.innerHTML = recentTickers.map(r => {
+    const isTW = r.ticker.endsWith('.TW');
+    const onclick = isTW
+      ? `setMarket('TW'); quickLoad('${r.ticker}')`
+      : `setMarket('US'); quickLoad('${r.ticker}')`;
+    return `<button class="q-btn recent" onclick="${onclick}">${r.name}</button>`;
+  }).join('');
+}
+
 function quickLoad(ticker) {
+  const isTW = ticker.endsWith('.TW');
+  if (isTW) setMarket('TW'); else setMarket('US');
   document.getElementById('tickerInput').value = ticker.replace('.TW','');
   loadStock(ticker);
 }
@@ -411,6 +459,11 @@ function computeRSI(data,period) {
 
 function renderAll(d) {
   renderStockHeader(d); renderChart(d); renderFactors(d);
+  // 記錄最近查詢
+  const displayName = d.ticker.endsWith('.TW')
+    ? d.ticker.replace('.TW','') + ' ' + (d.name || '')
+    : d.ticker;
+  addRecent(d.ticker, displayName.trim());
   if (d.ticker.endsWith('.TW')) {
     loadTWSE(d.ticker.replace('.TW',''));
   } else {
