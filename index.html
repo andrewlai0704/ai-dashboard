@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AI 金融分析 Dashboard</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -177,11 +177,16 @@
 </div>
 
 <div id="chartArea" class="chart-area">
-  <p class="section-label" style="margin-bottom:12px">近30日走勢 + EMA20</p>
-  <div style="position:relative;width:100%;height:220px;">
-    <canvas id="priceChart"></canvas>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <p class="section-label" style="margin:0">K線圖 + 成交量</p>
+    <div style="display:flex;gap:4px;" id="klineToggle">
+      <button class="mkt-btn active" id="btn1d" onclick="switchKline('1d')">日K</button>
+      <button class="mkt-btn" id="btn1wk" onclick="switchKline('1wk')">週K</button>
+      <button class="mkt-btn" id="btn1mo" onclick="switchKline('1mo')">月K</button>
+    </div>
   </div>
-  <div id="chartLegend" style="display:flex;gap:16px;margin-top:8px;flex-wrap:wrap"></div>
+  <div id="priceChart" style="width:100%;height:260px;"></div>
+  <div id="volumeChart" style="width:100%;height:80px;margin-top:4px;"></div>
 </div>
 
 <div id="factorGrid" class="factor-grid">
@@ -247,7 +252,10 @@
 
 <script>
 let currentMarket = 'US';
-let priceChartInstance = null;
+let lwChart = null;
+let lwVolChart = null;
+let currentInterval = "1d";
+let currentTicker = null;
 
 async function loadMarkets() {
   const names = ['S&P 500','NASDAQ','道瓊','台灣加權','日經225','恆生'];
@@ -315,7 +323,12 @@ async function loadStock(forceTicker) {
 }
 
 async function fetchYahooData(ticker) {
-  const url = `/api/stock?ticker=${encodeURIComponent(ticker)}`;
+  currentInterval = '1d';
+  ['btn1d','btn1wk','btn1mo'].forEach((id,i) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', i===0);
+  });
+  const url = `/api/stock?ticker=${encodeURIComponent(ticker)}&interval=1d`;
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
@@ -335,6 +348,7 @@ async function fetchYahooData(ticker) {
     high52:meta.fiftyTwoWeekHigh, low52:meta.fiftyTwoWeekLow,
     pe:meta.trailingPE, avgVol, latestVol:volumes.slice(-1)[0],
     volRatio:volumes.slice(-1)[0]/avgVol, labels, closes, volumes,
+    timestamps:ts, opens:q.open, highs:q.high, lows:q.low,
     ema20:computeEMA(closes,20),
     rsiLatest:computeRSI(closes,14).filter(Boolean).slice(-1)[0],
   };
@@ -475,33 +489,140 @@ function renderStockHeader(d) {
 
 function renderChart(d) {
   document.getElementById('chartArea').classList.add('visible');
-  const up=d.chgAbs>=0, lineColor=up?'#1a9e75':'#d85a30';
-  const closes=d.closes.map(v=>v?parseFloat(v.toFixed(2)):null);
-  const ema20=d.ema20.map(v=>v?parseFloat(v.toFixed(2)):null);
-  if (priceChartInstance) priceChartInstance.destroy();
-  priceChartInstance=new Chart(document.getElementById('priceChart').getContext('2d'),{
-    type:'line',
-    data:{labels:d.labels,datasets:[
-      {label:'收盤價',data:closes,borderColor:lineColor,borderWidth:2,pointRadius:0,tension:0.3,fill:false},
-      {label:'EMA20', data:ema20, borderColor:'#185fa5',borderWidth:1.5,pointRadius:0,tension:0.3,fill:false,borderDash:[4,3]},
-    ]},
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      interaction:{mode:'index',intersect:false},
-      plugins:{legend:{display:false},tooltip:{backgroundColor:'rgba(0,0,0,0.75)',titleFont:{size:11},bodyFont:{size:11}}},
-      scales:{
-        x:{ticks:{font:{size:10},maxTicksLimit:8,color:'#888'},grid:{color:'rgba(128,128,128,0.1)'}},
-        y:{ticks:{font:{size:10},color:'#888'},grid:{color:'rgba(128,128,128,0.1)'}},
-      }
-    }
+  currentTicker = d.ticker;
+  renderKlineChart(d);
+}
+
+async function switchKline(interval) {
+  currentInterval = interval;
+  ['1d','1wk','1mo'].forEach(i => {
+    const btnMap = {'1d':'btn1d','1wk':'btn1wk','1mo':'btn1mo'};
+    document.getElementById(btnMap[i]).classList.toggle('active', i === interval);
   });
-  document.getElementById('chartLegend').innerHTML=`
-    <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)">
-      <span style="width:20px;height:2px;background:${lineColor};border-radius:1px;display:inline-block"></span>收盤價
-    </span>
-    <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)">
-      <span style="width:20px;height:2px;background:#185fa5;border-radius:1px;display:inline-block;opacity:.7"></span>EMA20
-    </span>`;
+  if (!currentTicker) return;
+
+  const priceEl = document.getElementById('priceChart');
+  priceEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:12px;color:var(--muted)">載入中...</div>';
+
+  try {
+    const url = '/api/stock?ticker=' + encodeURIComponent(currentTicker) + '&interval=' + interval;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const res = j.chart.result[0];
+    const q = res.indicators.quote[0];
+    const ts = res.timestamp;
+    const meta = res.meta;
+    const current = meta.regularMarketPrice || q.close.filter(Boolean).slice(-1)[0];
+    const prev = meta.chartPreviousClose || q.close.filter(Boolean).slice(-2)[0];
+    const avgVol = q.volume.filter(Boolean).reduce((a,b)=>a+b,0)/q.volume.filter(Boolean).length;
+
+    const newD = {
+      ticker: currentTicker,
+      price: current,
+      chgAbs: current - prev,
+      timestamps: ts,
+      opens: q.open, highs: q.high, lows: q.low, closes: q.close, volumes: q.volume,
+      ema20: computeEMA(q.close, 20),
+      volRatio: q.volume.slice(-1)[0] / avgVol,
+    };
+    renderKlineChart(newD);
+  } catch(e) {
+    priceEl.innerHTML = '<div style="padding:20px;font-size:12px;color:var(--down)">載入失敗：' + e.message + '</div>';
+  }
+}
+
+function renderKlineChart(d) {
+  // Destroy old charts
+  if (lwChart) { lwChart.remove(); lwChart = null; }
+  if (lwVolChart) { lwVolChart.remove(); lwVolChart = null; }
+
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const bg = isDark ? '#1a1a1a' : '#ffffff';
+  const textColor = isDark ? '#aaaaaa' : '#666666';
+  const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+
+  const chartOpts = {
+    layout: { background: { color: bg }, textColor },
+    grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: gridColor },
+    timeScale: { borderColor: gridColor, timeVisible: true },
+    handleScroll: true,
+    handleScale: true,
+  };
+
+  // Price chart
+  const priceEl = document.getElementById('priceChart');
+  priceEl.innerHTML = '';
+  lwChart = LightweightCharts.createChart(priceEl, { ...chartOpts, height: 260 });
+
+  const candleSeries = lwChart.addCandlestickSeries({
+    upColor: '#1a9e75', downColor: '#d85a30',
+    borderUpColor: '#1a9e75', borderDownColor: '#d85a30',
+    wickUpColor: '#1a9e75', wickDownColor: '#d85a30',
+  });
+
+  const emaSeries = lwChart.addLineSeries({
+    color: '#185fa5', lineWidth: 1.5,
+    priceLineVisible: false, lastValueVisible: false,
+  });
+
+  // Volume chart
+  const volEl = document.getElementById('volumeChart');
+  volEl.innerHTML = '';
+  lwVolChart = LightweightCharts.createChart(volEl, {
+    ...chartOpts,
+    height: 80,
+    rightPriceScale: { borderColor: gridColor, scaleMargins: { top: 0.1, bottom: 0 } },
+    timeScale: { visible: false },
+  });
+
+  const volSeries = lwVolChart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'right',
+  });
+
+  // Build OHLCV data
+  const ts = d.timestamps || [];
+  const opens = d.opens || d.closes;
+  const highs = d.highs || d.closes;
+  const lows = d.lows || d.closes;
+  const closes = d.closes;
+  const volumes = d.volumes || [];
+  const ema20 = d.ema20 || [];
+
+  const candleData = [], emaData = [], volData = [];
+
+  for (let i = 0; i < ts.length; i++) {
+    if (!closes[i]) continue;
+    const t = ts[i];
+    const o = opens[i] || closes[i];
+    const h = highs[i] || closes[i];
+    const l = lows[i] || closes[i];
+    const c = closes[i];
+    const v = volumes[i] || 0;
+    const isUp = c >= o;
+
+    candleData.push({ time: t, open: parseFloat(o.toFixed(4)), high: parseFloat(h.toFixed(4)), low: parseFloat(l.toFixed(4)), close: parseFloat(c.toFixed(4)) });
+    volData.push({ time: t, value: v, color: isUp ? 'rgba(26,158,117,0.6)' : 'rgba(216,90,48,0.6)' });
+    if (ema20[i]) emaData.push({ time: t, value: parseFloat(ema20[i].toFixed(4)) });
+  }
+
+  candleSeries.setData(candleData);
+  emaSeries.setData(emaData);
+  volSeries.setData(volData);
+
+  // Sync crosshair between charts
+  lwChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (lwVolChart && range) lwVolChart.timeScale().setVisibleLogicalRange(range);
+  });
+  lwVolChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (lwChart && range) lwChart.timeScale().setVisibleLogicalRange(range);
+  });
+
+  lwChart.timeScale().fitContent();
+  lwVolChart.timeScale().fitContent();
 }
 
 function renderFactors(d) {
