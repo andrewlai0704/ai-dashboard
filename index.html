@@ -601,10 +601,8 @@ RSI：${d.rsiLatest?d.rsiLatest.toFixed(1):'N/A'} | EMA20：${ema20v} | 在EMA20
 }
 
 // ── 今日盤前簡報 ──────────────────────────────────────────
-const US_WATCHLIST = ['MU','OUST'];
-const TW_WATCHLIST = [
-  {ticker:'2313.TW', no:'2313'},
-];
+const US_WATCHLIST = ['OUST'];
+const TW_WATCHLIST = [];
 
 async function fetchStockSummary(ticker) {
   try {
@@ -657,13 +655,7 @@ async function generateBriefing() {
     const twseResults = await Promise.all(TW_WATCHLIST.map(s=>fetchTWSESummary(s.no)));
     const twCombined = TW_WATCHLIST.map((s,i)=>({...twResults[i], twse:twseResults[i]})).filter(d=>d&&d.price);
     btn.textContent='⏳ Claude 分析中...';
-    const marketSummary=markets.filter(m=>m.live).map(m=>`${m.name}：${m.price?.toFixed?m.price.toFixed(0):m.price}（${m.chg>=0?'+':''}${m.chg?.toFixed(2)}%）`).join('、');
-    const usStocksSummary=usResults.filter(Boolean).map(s=>`${s.ticker} ${s.name}：$${s.price}（${s.chgPct>=0?'+':''}${s.chgPct}%）RSI=${s.rsi} ${s.aboveEMA20?'站上EMA20':'跌破EMA20'}`).join('\n');
-    const twStocksSummary=twCombined.map(s=>{
-      const tw=s.twse;
-      const inst=tw?`外資${tw.foreign>=0?'+':''}${tw.foreign}張 投信${tw.trust>=0?'+':''}${tw.trust}張 合計${tw.total>=0?'+':''}${tw.total}張`:'法人數據無';
-      return `${s.ticker.replace('.TW','')} ${s.name}：${s.price}（${s.chgPct>=0?'+':''}${s.chgPct}%）法人：${inst}`;
-    }).join('\n');
+    // 簡化版：只用 OUST 數據，不需要 marketSummary / twStocksSummary
     const hour=now.getHours();
     const session=hour>=8&&hour<14?'台股盤中':hour>=14&&hour<22?'盤後/美股盤前':'美股盤中/收盤後';
     const prompt=`台北時間 ${timeStr}（${session}）盤前簡報。
@@ -691,9 +683,8 @@ ${twStocksSummary}
     const r=await fetch('/api/analyze',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6', max_tokens:2000,
-        tools:[{type:'web_search_20250305',name:'web_search'}],
-        system:'你是頂尖的台股美股分析師，擅長盤前市場解讀。你可以使用 web_search 工具搜尋每檔個股的最新新聞、分析師評級、目標價調整、重大事件等催化劑。輸出繁體中文，格式清晰，每段落用標題分隔。',
+        model:'claude-sonnet-4-6', max_tokens:600,
+        system:'你是美股分析師，根據技術數據給出精簡的繁體中文盤前分析，每段落一到兩句。',
         messages:[{role:'user',content:prompt}]
       })
     });
