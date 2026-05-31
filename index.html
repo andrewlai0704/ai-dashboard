@@ -104,6 +104,32 @@
              vertical-align:-2px; margin-right:6px; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .error-msg { font-size:12px; color:#a32d2d; padding:8px 0; display:none; }
+  .inst-panel { background:var(--bg); border:1px solid var(--border);
+                border-radius:var(--radius-lg); padding:16px 20px;
+                margin-bottom:12px; display:none; }
+  .inst-panel.visible { display:block; }
+  .inst-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+               gap:8px; margin-top:12px; }
+  .inst-card { background:var(--surface); border-radius:var(--radius-md); padding:10px 12px; }
+  .inst-name { font-size:11px; color:var(--hint); margin-bottom:6px; }
+  .inst-net { font-size:18px; font-weight:500; font-family:var(--font-mono); }
+  .inst-detail { font-size:11px; color:var(--muted); margin-top:3px; }
+  .inst-total { margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
+                display:flex; justify-content:space-between; align-items:center; }
+  .inst-total-label { font-size:12px; color:var(--muted); }
+  .inst-total-val { font-size:16px; font-weight:500; font-family:var(--font-mono); }
+  .inst-panel { background:var(--bg); border:1px solid var(--border);
+                border-radius:var(--radius-lg); padding:16px 20px;
+                margin-bottom:12px; display:none; }
+  .inst-panel.visible { display:block; }
+  .inst-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+               gap:8px; margin-top:12px; }
+  .inst-card { background:var(--surface); border-radius:var(--radius-md); padding:10px 12px; }
+  .inst-name { font-size:11px; color:var(--hint); margin-bottom:6px; }
+  .inst-net { font-size:18px; font-weight:500; font-family:var(--font-mono); }
+  .inst-detail { font-size:11px; color:var(--muted); margin-top:3px; }
+  .inst-total { margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
+                display:flex; justify-content:space-between; align-items:center; }
 </style>
 </head>
 <body>
@@ -189,6 +215,26 @@
     <div class="fc-bar-bg"><div class="fc-bar-fill" id="fb-overall" style="width:0%;background:#534ab7"></div></div>
     <div class="fc-label" id="fl-overall">等待分析</div>
   </div>
+</div>
+
+<div id="instPanel" class="inst-panel">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+    <span style="font-size:11px;font-weight:500;background:#fff3e0;color:#b45309;padding:3px 10px;border-radius:8px;">台股法人籌碼</span>
+    <span style="font-size:14px;font-weight:500;" id="instTitle">三大法人買賣超</span>
+    <span style="font-size:11px;color:var(--hint);margin-left:auto;" id="instDate"></span>
+  </div>
+  <div class="inst-grid" id="instGrid"></div>
+  <div class="inst-total" id="instTotal"></div>
+</div>
+
+<div id="instPanel" class="inst-panel">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+    <span style="font-size:11px;font-weight:500;background:#fff3e0;color:#b45309;padding:3px 10px;border-radius:8px;">台股法人籌碼</span>
+    <span style="font-size:14px;font-weight:500;" id="instTitle">三大法人買賣超</span>
+    <span style="font-size:11px;color:var(--hint);margin-left:auto;" id="instDate"></span>
+  </div>
+  <div class="inst-grid" id="instGrid"></div>
+  <div class="inst-total" id="instTotal"></div>
 </div>
 
 <div id="aiPanel" class="ai-panel">
@@ -350,7 +396,60 @@ function computeRSI(data,period) {
 }
 
 function renderAll(d) {
-  renderStockHeader(d); renderChart(d); renderFactors(d); runClaudeAnalysis(d);
+  renderStockHeader(d); renderChart(d); renderFactors(d);
+  if (d.ticker.endsWith('.TW')) {
+    loadTWSE(d.ticker.replace('.TW',''));
+  } else {
+    document.getElementById('instPanel').classList.remove('visible');
+  }
+  runClaudeAnalysis(d);
+}
+
+async function loadTWSE(stockNo) {
+  const panel = document.getElementById('instPanel');
+  const grid = document.getElementById('instGrid');
+  const total = document.getElementById('instTotal');
+  panel.classList.add('visible');
+  document.getElementById('instTitle').textContent = stockNo + ' 三大法人買賣超';
+  grid.innerHTML = '<span style="font-size:12px;color:var(--muted)">載入法人數據中...</span>';
+  total.innerHTML = '';
+
+  try {
+    const r = await fetch('/api/twse?stockNo=' + encodeURIComponent(stockNo));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    document.getElementById('instDate').textContent = d.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3') + ' 資料';
+
+    const fmt = (n) => {
+      if (n === 0) return '<span style="color:var(--muted)">0</span>';
+      const s = n > 0 ? '+' : '';
+      const color = n > 0 ? 'var(--up)' : 'var(--down)';
+      return `<span style="color:${color}">${s}${n.toLocaleString()}</span>`;
+    };
+
+    grid.innerHTML = [
+      { name: '外資', data: d.foreign },
+      { name: '投信', data: d.trust },
+      { name: '自營商', data: d.dealer },
+    ].map(item => `
+      <div class="inst-card">
+        <div class="inst-name">${item.name}</div>
+        <div class="inst-net">${fmt(item.data.net)}</div>
+        <div class="inst-detail">買 ${item.data.buy.toLocaleString()} / 賣 ${item.data.sell.toLocaleString()}</div>
+      </div>
+    `).join('');
+
+    const totalColor = d.total > 0 ? 'var(--up)' : d.total < 0 ? 'var(--down)' : 'var(--muted)';
+    const totalSign = d.total > 0 ? '+' : '';
+    total.innerHTML = `
+      <span style="font-size:12px;color:var(--muted);">三大法人合計買賣超</span>
+      <span style="font-size:18px;font-weight:500;font-family:var(--font-mono);color:${totalColor}">${totalSign}${d.total.toLocaleString()} 張</span>
+    `;
+  } catch(e) {
+    grid.innerHTML = `<span style="font-size:12px;color:var(--muted)">法人數據暫無：${e.message}</span>`;
+  }
 }
 
 function renderStockHeader(d) {
