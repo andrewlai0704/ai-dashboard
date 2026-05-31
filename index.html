@@ -203,25 +203,36 @@
 let currentMarket = 'US';
 let priceChartInstance = null;
 
-const MOCK_MARKETS = [
-  { name:'S&P 500',  price:5842.30,  chg:+0.62 },
-  { name:'NASDAQ',   price:18921.40, chg:+0.89 },
-  { name:'道瓊',     price:43201.50, chg:+0.35 },
-  { name:'台灣加權', price:23145.80, chg:-0.42 },
-  { name:'日經225',  price:38704.20, chg:+1.12 },
-  { name:'恆生',     price:22341.60, chg:-0.78 },
-];
+async function loadMarkets() {
+  const names = ['S&P 500','NASDAQ','道瓊','台灣加權','日經225','恆生'];
+  document.getElementById('marketGrid').innerHTML = names.map(name =>
+    `<div class="market-card"><div class="mc-name">${name}</div><div class="mc-price" style="font-size:13px;color:var(--muted)">載入中...</div><div class="mc-chg" style="color:var(--hint)">—</div></div>`
+  ).join('');
 
-function renderMarketGrid() {
-  document.getElementById('marketGrid').innerHTML = MOCK_MARKETS.map(m => {
-    const up = m.chg >= 0;
-    return `<div class="market-card">
-      <div class="mc-name">${m.name}</div>
-      <div class="mc-price">${m.price.toLocaleString()}</div>
-      <div class="mc-chg ${up?'mc-up':'mc-dn'}">${up?'▲':'▼'} ${Math.abs(m.chg).toFixed(2)}%</div>
-    </div>`;
-  }).join('');
+  try {
+    const r = await fetch('/api/markets');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const markets = await r.json();
+    document.getElementById('marketGrid').innerHTML = markets.map(m => {
+      if (!m.live || m.price === null) {
+        return `<div class="market-card"><div class="mc-name">${m.name}</div><div class="mc-price" style="font-size:13px;color:var(--muted)">無數據</div><div class="mc-chg" style="color:var(--hint)">—</div></div>`;
+      }
+      const up = m.chg >= 0;
+      const priceStr = m.price >= 1000
+        ? m.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})
+        : m.price.toFixed(2);
+      return `<div class="market-card">
+        <div class="mc-name">${m.name}</div>
+        <div class="mc-price">${priceStr}</div>
+        <div class="mc-chg ${up?'mc-up':'mc-dn'}">${up?'▲':'▼'} ${Math.abs(m.chg).toFixed(2)}%</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    console.error('市場數據載入失敗:', e.message);
+  }
 }
+
+function renderMarketGrid() { loadMarkets(); }
 
 function setMarket(m) {
   currentMarket = m;
