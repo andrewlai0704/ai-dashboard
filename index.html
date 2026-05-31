@@ -601,10 +601,8 @@ RSI：${d.rsiLatest?d.rsiLatest.toFixed(1):'N/A'} | EMA20：${ema20v} | 在EMA20
 }
 
 // ── 今日盤前簡報 ──────────────────────────────────────────
-const US_WATCHLIST = ['AAPL','NVDA','TSLA','MSFT','META','MU','AAOI','OUST'];
+const US_WATCHLIST = ['MU','OUST'];
 const TW_WATCHLIST = [
-  {ticker:'2330.TW', no:'2330'},
-  {ticker:'2317.TW', no:'2317'},
   {ticker:'2313.TW', no:'2313'},
 ];
 
@@ -666,32 +664,23 @@ async function generateBriefing() {
     }).join('\n');
     const hour=now.getHours();
     const session=hour>=8&&hour<14?'台股盤中':hour>=14&&hour<22?'盤後/美股盤前':'美股盤中/收盤後';
-    const prompt=`現在是台北時間 ${timeStr}（${session}）。
+    const prompt=`台北時間 ${timeStr}（${session}）盤前簡報。
 
-請根據以下數據，產生一份專業的盤前簡報，使用繁體中文。
+全球指數：${marketSummary}
 
-【全球主要指數】
-${marketSummary}
-
-【美股關注清單】
+美股：
 ${usStocksSummary}
 
-【台股關注清單（含法人籌碼）】
+台股：
 ${twStocksSummary}
 
-請輸出以下段落：
-1. 📊 盤勢總結（2-3句，說明目前市場氛圍）
-2. 🇺🇸 美股重點（逐一點評關注個股，說明強弱與注意事項）
-3. 🇹🇼 台股重點（逐一點評，結合法人籌碼方向）
-4. ⚡ 今日操作重點（3條具體建議）
-5. ⚠️ 主要風險（今日需注意的風險因素）
-
-每段落簡潔有力，適合盤前快速閱讀。`;
+請用繁體中文輸出五個段落（每段2句內）：
+1.📊盤勢總結 2.🇺🇸美股重點 3.🇹🇼台股重點 4.⚡操作建議 5.⚠️主要風險`;
 
     const r=await fetch('/api/analyze',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6', max_tokens:1500,
+        model:'claude-sonnet-4-6', max_tokens:800,
         system:'你是頂尖的台股美股分析師，擅長盤前市場解讀。輸出繁體中文，格式清晰，每段落用標題分隔。',
         messages:[{role:'user',content:prompt}]
       })
