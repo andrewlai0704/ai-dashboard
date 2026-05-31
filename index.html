@@ -638,71 +638,62 @@ async function generateBriefing() {
   const panel=document.getElementById('briefPanel');
   const bc=document.getElementById('briefContent');
   const timeEl=document.getElementById('briefTime');
-  btn.disabled=true; btn.textContent='⏳ 收集數據中...';
+
+  btn.disabled=true; btn.textContent='⏳ 載入 OUST 數據...';
   panel.classList.add('visible');
-  bc.innerHTML='<span class="spinner"></span> 正在收集各市場數據，請稍候...';
+  bc.innerHTML='<span class="spinner"></span> 正在取得 OUST 數據...';
+
   const now=new Date();
   const timeStr=now.toLocaleString('zh-TW',{timeZone:'Asia/Taipei',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
   timeEl.textContent=timeStr+' 台北時間';
+
   try {
-    btn.textContent='⏳ 載入全球市場...';
-    const mr = await fetch('/api/markets');
-    const markets = mr.ok ? await mr.json() : [];
-    btn.textContent='⏳ 載入美股數據...';
-    const usResults = await Promise.all(US_WATCHLIST.map(t=>fetchStockSummary(t)));
-    btn.textContent='⏳ 載入台股數據...';
-    const twResults = await Promise.all(TW_WATCHLIST.map(s=>fetchStockSummary(s.ticker)));
-    const twseResults = await Promise.all(TW_WATCHLIST.map(s=>fetchTWSESummary(s.no)));
-    const twCombined = TW_WATCHLIST.map((s,i)=>({...twResults[i], twse:twseResults[i]})).filter(d=>d&&d.price);
+    // 只抓 OUST 一檔
+    const oust = await fetchStockSummary('OUST');
+    if (!oust) throw new Error('無法取得 OUST 數據');
+
     btn.textContent='⏳ Claude 分析中...';
-    // 簡化版：只用 OUST 數據，不需要 marketSummary / twStocksSummary
-    const hour=now.getHours();
-    const session=hour>=8&&hour<14?'台股盤中':hour>=14&&hour<22?'盤後/美股盤前':'美股盤中/收盤後';
-    const prompt=`台北時間 ${timeStr}（${session}）盤前簡報。
+    bc.innerHTML='<span class="spinner"></span> Claude 正在分析 OUST...';
 
-【市場數據】
-全球指數：${marketSummary}
-美股：
-${usStocksSummary}
-台股：
-${twStocksSummary}
+    const prompt=`OUST（Ouster，雷達感測器）盤前分析（台北時間 ${timeStr}）：
+股價：$${oust.price}（今日 ${oust.chgPct>=0?'+':''}${oust.chgPct}%）
+RSI(14)：${oust.rsi}
+EMA20：${oust.aboveEMA20?'股價站上 EMA20（多頭排列）':'股價跌破 EMA20（空頭排列）'}
 
-【任務】
-請先用 web_search 搜尋以下資訊（每檔各搜一次）：
-- MU 最新新聞、分析師目標價、財報或產業動態
-- OUST 最新新聞、分析師目標價調整、機構評級
-- 台股2313 華通最新新聞、法人報告、近期利多利空
-
-搜尋完成後，用繁體中文輸出以下五個段落（每段2-3句）：
-1.📊 盤勢總結
-2.🇺🇸 美股重點（含最新催化劑）
-3.🇹🇼 台股重點（含最新催化劑）
-4.⚡ 今日操作建議
-5.⚠️ 主要風險`;
+請用繁體中文輸出以下四段（每段1-2句）：
+1. 📊 多空評分（1-10分）與判斷依據
+2. 🇺🇸 技術面重點（趨勢、支撐壓力）
+3. ⚡ 操作建議（進場或觀望？）
+4. ⚠️ 主要風險`;
 
     const r=await fetch('/api/analyze',{
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6', max_tokens:600,
-        system:'你是美股分析師，根據技術數據給出精簡的繁體中文盤前分析，每段落一到兩句。',
+        model:'claude-sonnet-4-6',
+        max_tokens:500,
+        system:'你是美股技術分析師，給出精簡有力的繁體中文分析，每段一到兩句。',
         messages:[{role:'user',content:prompt}]
       })
     });
+
     if (!r.ok) throw new Error('API '+r.status);
     const json=await r.json();
     if (!json.content) throw new Error(JSON.stringify(json));
-    // 過濾出 text 類型的 block（忽略 tool_use / tool_result）
     const text=json.content.filter(b=>b.type==='text').map(b=>b.text||'').join('');
+
     const html=text.split('\n').filter(l=>l.trim()).map(l=>{
-      if (l.match(/^#{1,3} /)) return `<h3>${l.replace(/^#{1,3} /,'')}</h3>`;
-      if (l.match(/^[1-5]\.|^📊|^🇺🇸|^🇹🇼|^⚡|^⚠️/)) return `<h3>${l}</h3>`;
+      if (l.match(/^[1-4]\.|^📊|^🇺🇸|^⚡|^⚠️/)) return `<h3>${l}</h3>`;
       return `<p>${l}</p>`;
     }).join('');
-    bc.innerHTML=html+'<p style="margin-top:16px;font-size:11px;color:var(--hint)">⚠️ 以上分析由 Claude AI 產生，僅供參考，不構成投資建議。</p>';
+
+    bc.innerHTML=html+'<p style="margin-top:14px;font-size:11px;color:var(--hint)">⚠️ 僅供參考，不構成投資建議。</p>';
+
   } catch(e) {
     bc.innerHTML=`<span style="color:var(--down)">產生失敗：${e.message}</span>`;
   } finally {
-    btn.disabled=false; btn.textContent='🔄 重新產生簡報';
+    btn.disabled=false;
+    btn.textContent='🔄 重新產生簡報';
   }
 }
 
