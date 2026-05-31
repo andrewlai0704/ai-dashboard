@@ -428,7 +428,7 @@ async function runClaudeAnalysis(d) {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
+        model:'claude-sonnet-4-6',
         max_tokens:1000,
         system:`你是一位資深量化分析師，精通台股與美股市場。根據技術指標與籌碼數據，給出簡潔的繁體中文分析報告。格式：多空評分→技術面→量能面→法人動向→操作建議→主要風險。每段不超過兩句，保持精簡有力。`,
         messages:[{role:'user',content:`分析：${d.ticker} ${d.name}
